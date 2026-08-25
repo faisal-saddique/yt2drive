@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import shutil
 import sys
 import threading
@@ -15,6 +16,7 @@ from .downloader import (
     DEFAULT_PROFILE,
     BotCheckError,
     SyncOptions,
+    list_playlist,
     sync_playlist,
 )
 from .manifest import (
@@ -24,6 +26,7 @@ from .manifest import (
     STATUS_UNAVAILABLE,
     Manifest,
 )
+from .naming import safe_filename
 
 BOTCHECK_HELP = """
 YouTube challenged this session ("confirm you're not a bot"). This is normal
@@ -92,8 +95,8 @@ class Reporter:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    dest = Path(args.dest).expanduser().resolve()
-    dest.mkdir(parents=True, exist_ok=True)
+    base_dest = Path(args.dest).expanduser().resolve()
+    base_dest.mkdir(parents=True, exist_ok=True)
 
     if shutil.which("ffmpeg") is None:
         print(
@@ -105,8 +108,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
         )
         return 2
 
-    opts = SyncOptions(
-        dest=dest,
+    base_opts = SyncOptions(
+        dest=base_dest,
         profile=args.format,
         workers=args.workers,
         cookies=Path(args.cookies).expanduser() if args.cookies else None,
@@ -124,20 +127,41 @@ def cmd_sync(args: argparse.Namespace) -> int:
         verbose=args.verbose,
     )
 
-    manifest = Manifest(dest).load()
-    if args.reconcile:
-        stats = manifest.reconcile()
-        if any(stats.values()):
-            print(
-                f"reconciled: adopted {stats['adopted']} existing file(s), "
-                f"{stats['missing']} missing, {stats['resized']} resized"
-            )
-
     reporter = Reporter(quiet=args.quiet)
     totals = {"downloaded": 0, "bytes": 0, "failed": 0, "present": 0, "dupes": 0}
+    libraries: List[Path] = []
     exit_code = 0
 
+    # Without --auto-folder, every playlist shares one destination/manifest so
+    # tracks common to several playlists are only ever fetched once.
+    shared_manifest = None if args.auto_folder else Manifest(base_dest).load()
+
     for url in args.urls:
+        if args.auto_folder:
+            try:
+                _, playlist_title, _ = list_playlist(url, base_opts)
+            except BotCheckError:
+                print(BOTCHECK_HELP, file=sys.stderr)
+                return 3
+            except Exception as exc:  # noqa: BLE001 — surface any extractor failure cleanly
+                print(f"error reading {url}: {exc}", file=sys.stderr)
+                exit_code = 1
+                continue
+            dest = base_dest / safe_filename(playlist_title, fallback="playlist")
+        else:
+            dest = base_dest
+        dest.mkdir(parents=True, exist_ok=True)
+        opts = dataclasses.replace(base_opts, dest=dest)
+
+        manifest = shared_manifest or Manifest(dest).load()
+        if args.reconcile:
+            stats = manifest.reconcile()
+            if any(stats.values()):
+                print(
+                    f"reconciled: adopted {stats['adopted']} existing file(s), "
+                    f"{stats['missing']} missing, {stats['resized']} resized"
+                )
+
         try:
             result = sync_playlist(url, opts, manifest, on_event=reporter)
         except BotCheckError:
@@ -147,6 +171,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"error reading {url}: {exc}", file=sys.stderr)
             exit_code = 1
             continue
+        finally:
+            manifest.save(force=True)
+
+        if dest not in libraries:
+            libraries.append(dest)
 
         totals["downloaded"] += result.downloaded
         totals["bytes"] += result.bytes_added
@@ -161,8 +190,6 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if result.failed:
             exit_code = max(exit_code, 1)
 
-    manifest.save(force=True)
-
     if args.dry_run:
         print("\n(dry run — nothing downloaded)")
     else:
@@ -173,7 +200,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
             f"{totals['dupes']} duplicates, "
             f"{totals['failed']} failed."
         )
-        print(f"Library: {dest}")
+        if len(libraries) > 1:
+            print("Libraries:")
+            for lib in libraries:
+                print(f"  {lib}")
+        else:
+            print(f"Library: {libraries[0] if libraries else base_dest}")
         if totals["failed"]:
             print("Re-run with --retry-failed to retry the failures.")
     return exit_code
@@ -234,6 +266,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sync", help="download everything new from one or more playlists")
     p.add_argument("urls", nargs="+", metavar="URL", help="playlist or video URL(s)")
     p.add_argument("-d", "--dest", required=True, help="destination folder (e.g. a mounted Drive folder)")
+    p.add_argument(
+        "--auto-folder", action="store_true",
+        help="create a subfolder named after each playlist inside --dest, instead of writing straight into it",
+    )
     p.add_argument(
         "-f", "--format", choices=sorted(AUDIO_PROFILES), default=DEFAULT_PROFILE,
         help=f"audio profile (default: {DEFAULT_PROFILE} — native AAC, no re-encode)",

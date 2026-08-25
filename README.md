@@ -29,12 +29,16 @@ This is the easiest path for two reasons:
 - **No auth setup.** Colab mounts your Drive with one approval popup. No GCP project, no OAuth consent screen, no service account JSON, no `rclone config`. Nothing is stored anywhere.
 - **It's fast and costs you nothing.** The download from YouTube and the write to Drive both happen inside Google's network. Your home connection is never in the path, so a 300-track playlist finishes at datacenter speed while your laptop does nothing.
 
+Don't want Drive at all? Step 2 in the notebook has a **"Colab local storage"** option — no Google account needed. Files stay on the Colab VM's disk and the last cell zips them up and downloads the zip through your browser. That disk is wiped when the runtime recycles, so it's only for pulling the zip down, not long-term storage.
+
 The tradeoff is that Colab runs on datacenter IPs, which YouTube sometimes challenges — see [bot checks](#when-youtube-asks-you-to-prove-youre-not-a-bot).
 
 ## Quick start (your own machine)
 
+Needs [uv](https://docs.astral.sh/uv/getting-started/installation/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`).
+
 ```bash
-pip install git+https://github.com/faisal-saddique/yt2drive.git
+uv tool install git+https://github.com/faisal-saddique/yt2drive.git
 
 # ffmpeg is required
 sudo apt install ffmpeg        # Debian/Ubuntu
@@ -144,7 +148,7 @@ Running on your own machine, `--cookies-from-browser chrome` skips the export en
 
 Consider a throwaway Google account rather than handing a session cookie to a cloud VM. `.gitignore` already blocks `cookies.txt` from being committed — keep it that way.
 
-If it still happens: drop to `--workers 1`, add `--sleep 2`, and make sure yt-dlp is current (`pip install -U yt-dlp`). An out-of-date yt-dlp is the single most common cause of extraction failures, because YouTube changes its player frequently.
+If it still happens: drop to `--workers 1`, add `--sleep 2`, and make sure yt-dlp is current (`uv tool upgrade yt2drive` pulls the latest). An out-of-date yt-dlp is the single most common cause of extraction failures, because YouTube changes its player frequently.
 
 ## Scheduling it
 
@@ -161,8 +165,8 @@ GitHub Actions is possible but not recommended: its IP ranges are bot-checked co
 ```bash
 git clone https://github.com/faisal-saddique/yt2drive.git
 cd yt2drive
-pip install -e ".[dev]"
-pytest -q
+uv sync --extra dev
+uv run pytest -q
 ```
 
 The suite covers naming, manifest persistence and recovery, the dedup/diff logic, error classification, and an integration test that pushes a synthetic media file through the real yt-dlp + ffmpeg postprocessor chain over localhost.
