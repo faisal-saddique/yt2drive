@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.eggs/
+
+# Secrets — never commit these
+cookies.txt
+*.cookies
+.env
+
+# Local output / scratch
+out/
+downloads/
+.yt2drive/
+*.m4a
+*.mp3
+*.opus
+*.webm
+*.part

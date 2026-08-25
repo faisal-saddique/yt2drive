@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yt2drive"
+version = "0.1.0"
+description = "Sync YouTube playlists to a folder (e.g. Google Drive) as tagged audio files, with deduplication."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Faisal Saddique" }]
+keywords = ["youtube", "playlist", "audio", "google-drive", "yt-dlp", "colab"]
+dependencies = [
+    "yt-dlp>=2025.1.15",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+yt2drive = "yt2drive.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/faisal-saddique/yt2drive"
+Issues = "https://github.com/faisal-saddique/yt2drive/issues"
+
+[tool.setuptools.packages.find]
+include = ["yt2drive*"]
