@@ -72,7 +72,7 @@ _PERMANENT_MARKERS = (
     "removed by the uploader",
     "account associated with this video has been terminated",
     "video has been removed",
-    "is not available",
+    "video is not available",
     "deleted video",
     "no longer available",
     "unavailable in your country",
