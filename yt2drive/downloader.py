@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from yt_dlp import YoutubeDL
+from yt_dlp.postprocessor import PostProcessor
 from yt_dlp.utils import DownloadError, ExtractorError
 
 from .manifest import (
@@ -366,6 +367,24 @@ def _resolve_output(info: dict, staging: Path, video_id: str, ext: str) -> Optio
     return None
 
 
+class _AlbumTagger(PostProcessor):
+    """Stamps every download with Album = the destination folder's name.
+
+    Players group audio by Artist/Album in their library view rather than by
+    folder, so without this, tracks from different synced playlists blur
+    together. Setting Album lets each library show up as its own group in
+    any tag-aware player, with no separate playlist file to import.
+    """
+
+    def __init__(self, album: str):
+        super().__init__()
+        self._album = album
+
+    def run(self, info):
+        info["album"] = self._album
+        return [], info
+
+
 def download_one(item: PlaylistItem, opts: SyncOptions, staging_root: Path) -> Entry:
     """Fetch one video into the destination. Raises on failure."""
     profile = AUDIO_PROFILES[opts.profile]
@@ -378,6 +397,8 @@ def download_one(item: PlaylistItem, opts: SyncOptions, staging_root: Path) -> E
         ydl_opts = _download_opts(opts, staging)
         url = f"https://www.youtube.com/watch?v={item.video_id}"
         with YoutubeDL(ydl_opts) as ydl:
+            if opts.embed_metadata:
+                ydl.add_post_processor(_AlbumTagger(opts.dest.name), when="pre_process")
             info = ydl.extract_info(url, download=True)
         if not info:
             raise RuntimeError("extractor returned no info")

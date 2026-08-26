@@ -54,9 +54,14 @@ Running locally has one real advantage: your residential IP essentially never ge
 
 ---
 
-## The playlist file
+## Each library shows up as its own group in your player
 
-Every `sync` and `channel` run writes `<library>/<library folder name>.m3u8` — a standard M3U playlist listing every track in that folder, in download order. It exists because most players (VLC included) group audio in their library view by tag metadata (Artist/Album) rather than by folder, so two libraries with overlapping artists can blur together. Opening the `.m3u8` — or just having it in the folder when you hand the whole thing to a player — gives each library its own playlist entry regardless of tags. It's regenerated on every run, so it always matches what's actually on disk.
+Most players (VLC included) group audio in their library view by tag metadata — Artist/Album — not by folder, so two libraries with overlapping artists or a shared uploader can blur together once you hand the whole thing to a phone or a car head unit. Two things fix that, and yt2drive does both automatically:
+
+- **Album tag.** Every track is stamped `Album = <library folder name>` at download time. This is the primary mechanism — it survives being moved, copied, or AirDropped anywhere, and works in any tag-aware player (VLC, Apple Music, Plex, a car stereo), not just the one you tested with.
+- **Playlist file.** Every `sync` and `channel` run also writes `<library>/<library folder name>.m3u8`, a standard M3U listing every track in that folder in download order. Some players surface this as an explicit "Playlist" entry once opened, on top of the Album grouping above.
+
+Both are regenerated on every run, so they always match what's actually on disk.
 
 ## How the deduplication works
 

@@ -10,6 +10,7 @@ from yt2drive.downloader import (
     BotCheckError,
     PlaylistItem,
     SyncOptions,
+    _AlbumTagger,
     _is_permanent,
     _raise_if_botcheck,
     sync_channel,
@@ -270,6 +271,14 @@ def test_permanent_errors_are_classified(message):
 ])
 def test_transient_errors_are_not_permanent(message):
     assert _is_permanent(message) is False
+
+
+def test_album_tagger_stamps_info_dict_with_the_given_name():
+    tagger = _AlbumTagger("My Cool Playlist")
+    files_to_delete, info = tagger.run({"title": "Some Track"})
+    assert files_to_delete == []
+    assert info["album"] == "My Cool Playlist"
+    assert info["title"] == "Some Track"  # other fields untouched
 
 
 def test_age_restriction_is_permanent_not_botcheck():

@@ -21,6 +21,7 @@ import pytest
 from yt2drive.downloader import (
     AUDIO_PROFILES,
     SyncOptions,
+    _AlbumTagger,
     _download_opts,
     _resolve_output,
     _safe_move,
@@ -135,6 +136,31 @@ def test_real_download_produces_playable_tagged_audio(server, tmp_path):
     assert len(audio) == 1
     assert audio[0]["codec_name"] == "aac"
     assert float(probe["format"]["duration"]) == pytest.approx(3.0, abs=0.5)
+
+
+def test_real_download_gets_tagged_with_the_destination_folder_name(server, tmp_path):
+    """Players group audio by Album, not by folder — so every download must be
+    stamped Album=<destination folder name> for a synced library to show up as
+    its own group, and this must survive the real ffmpeg postprocessor chain."""
+    from yt_dlp import YoutubeDL
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    dest = tmp_path / "My Cool Playlist"
+    dest.mkdir()
+
+    opts = SyncOptions(dest=dest, profile="m4a", embed_metadata=True, embed_thumbnail=False)
+    ydl_opts = _download_opts(opts, staging)
+
+    with YoutubeDL(ydl_opts) as ydl:
+        ydl.add_post_processor(_AlbumTagger(opts.dest.name), when="pre_process")
+        info = ydl.extract_info(f"{server}/sample.m4a", download=True)
+
+    produced = _resolve_output(info, staging, info["id"], "m4a")
+    assert produced is not None and produced.exists()
+
+    probe = ffprobe(produced)
+    assert probe["format"]["tags"]["album"] == "My Cool Playlist"
 
 
 def test_safe_move_is_atomic_and_leaves_no_partials(tmp_path):
