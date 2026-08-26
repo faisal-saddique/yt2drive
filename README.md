@@ -101,6 +101,12 @@ yt2drive sync URL --dest FOLDER
 # several playlists; tracks shared between them download once
 yt2drive sync URL_A URL_B --dest FOLDER
 
+# one subfolder per playlist, named after the playlist, inside FOLDER
+yt2drive sync URL_A URL_B --dest FOLDER --auto-folder
+
+# every playlist on a channel, deduped, into one FOLDER/<channel name> folder
+yt2drive channel "https://www.youtube.com/@handle/playlists" --dest FOLDER
+
 # see what would happen, download nothing
 yt2drive sync URL --dest FOLDER --dry-run
 
@@ -111,10 +117,13 @@ yt2drive status --dest FOLDER --failures
 yt2drive verify --dest FOLDER
 ```
 
+`channel` needs the channel's **playlists tab** (the `/playlists` URL) — a bare channel URL lists uploads instead, which isn't what this reads. A video that appears in more than one of the channel's playlists is only ever downloaded once.
+
 ### Useful flags
 
 | Flag | Effect |
 |---|---|
+| `--auto-folder` (`sync` only) | Create a subfolder named after each playlist inside `--dest`, instead of merging everything into one folder. |
 | `-w, --workers N` | Videos in parallel (default 3). Lower it if you're being rate-limited. |
 | `--fragments N` | Parallel chunks per video (default 4). |
 | `--dedupe-by-title` | Also skip re-uploads of a track you already have. |
@@ -178,7 +187,7 @@ yt2drive/
 ├── naming.py       filename sanitising, title normalisation for dedup
 ├── manifest.py     the dedup ledger: atomic JSON, filesystem reconciliation
 ├── downloader.py   yt-dlp engine: playlist diffing, parallel fetch, tagging
-└── cli.py          sync / status / verify
+└── cli.py          sync / channel / status / verify
 notebooks/
 └── yt2drive_colab.ipynb
 ```

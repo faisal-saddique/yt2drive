@@ -239,6 +239,49 @@ def list_playlist(url: str, opts: SyncOptions) -> Tuple[str, str, List[PlaylistI
     return playlist_id, playlist_title, items
 
 
+def list_channel(url: str, opts: SyncOptions) -> Tuple[str, str, List[Tuple[str, str, str]]]:
+    """Enumerate every playlist on a channel's /playlists page.
+
+    Returns ``(channel_id, channel_name, playlists)`` where each playlist is
+    ``(playlist_id, playlist_title, playlist_url)``. Point ``url`` at the
+    channel's playlists tab (e.g. ``.../@handle/playlists``) — a bare channel
+    URL lists uploaded videos instead, which this does not handle.
+    """
+    ydl_opts = _base_opts(opts)
+    ydl_opts.update({
+        "extract_flat": "in_playlist",
+        "skip_download": True,
+        "noplaylist": False,
+        "ignoreerrors": True,
+    })
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except DownloadError as exc:
+        _raise_if_botcheck(str(exc))
+        raise
+
+    if not info:
+        raise RuntimeError(f"Could not read channel: {url}")
+
+    channel_id = info.get("channel_id") or info.get("id") or ""
+    channel_name = info.get("channel") or info.get("uploader") or info.get("title") or channel_id
+
+    playlists: List[Tuple[str, str, str]] = []
+    for entry in info.get("entries") or []:
+        if not entry:
+            continue
+        playlist_url = entry.get("url")
+        playlist_id = entry.get("id") or ""
+        # A channel's uploads/shorts/live tabs list individual 11-char video
+        # IDs, not playlists — skip anything that isn't actually a playlist.
+        if not playlist_url or len(playlist_id) <= 11:
+            continue
+        playlists.append((playlist_id, entry.get("title") or playlist_id, playlist_url))
+    return channel_id, channel_name, playlists
+
+
 def _raise_if_botcheck(message: str) -> None:
     low = message.lower()
     if any(marker in low for marker in _BOTCHECK_MARKERS):
@@ -396,13 +439,71 @@ def sync_playlist(
 ) -> SyncResult:
     """Diff a playlist against the manifest and fetch only what's new."""
     emit = on_event or (lambda kind, data: None)
-    result = SyncResult()
 
     playlist_id, playlist_title, items = list_playlist(url, opts)
+    emit("playlist", {"id": playlist_id, "title": playlist_title, "count": len(items)})
+
+    result = _sync_items(items, playlist_id, opts, manifest, emit)
     result.playlist_id = playlist_id
     result.playlist_title = playlist_title
     result.total_in_playlist = len(items)
-    emit("playlist", {"id": playlist_id, "title": playlist_title, "count": len(items)})
+    return result
+
+
+def sync_channel(
+    url: str,
+    opts: SyncOptions,
+    manifest: Manifest,
+    on_event: Optional[Callable[[str, dict], None]] = None,
+) -> SyncResult:
+    """Merge every playlist on a channel into ``opts.dest``, deduped by video ID.
+
+    A video that appears in several of the channel's playlists is only ever
+    queued once — first-seen order across the channel's playlist listing wins.
+    """
+    emit = on_event or (lambda kind, data: None)
+
+    channel_id, channel_name, playlists = list_channel(url, opts)
+
+    merged: List[PlaylistItem] = []
+    seen_ids: set = set()
+    for playlist_id, playlist_title, playlist_url in playlists:
+        try:
+            _, _, items = list_playlist(playlist_url, opts)
+        except BotCheckError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — one broken playlist shouldn't sink the channel
+            emit("channel_playlist_skipped", {
+                "id": playlist_id, "title": playlist_title, "error": str(exc),
+            })
+            continue
+        for item in items:
+            if item.video_id in seen_ids:
+                continue
+            seen_ids.add(item.video_id)
+            merged.append(item)
+
+    emit("channel", {
+        "id": channel_id, "name": channel_name,
+        "playlists": len(playlists), "videos": len(merged),
+    })
+
+    result = _sync_items(merged, channel_id, opts, manifest, emit)
+    result.playlist_id = channel_id
+    result.playlist_title = channel_name
+    result.total_in_playlist = len(merged)
+    return result
+
+
+def _sync_items(
+    items: List[PlaylistItem],
+    playlist_id: str,
+    opts: SyncOptions,
+    manifest: Manifest,
+    emit: Callable[[str, dict], None],
+) -> SyncResult:
+    """Diff a flat list of items against the manifest and fetch only what's new."""
+    result = SyncResult()
 
     known_titles = manifest.title_keys() if opts.dedupe_by_title else {}
     pending: List[PlaylistItem] = []

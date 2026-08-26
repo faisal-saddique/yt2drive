@@ -16,7 +16,9 @@ from .downloader import (
     DEFAULT_PROFILE,
     BotCheckError,
     SyncOptions,
+    list_channel,
     list_playlist,
+    sync_channel,
     sync_playlist,
 )
 from .manifest import (
@@ -65,6 +67,14 @@ class Reporter:
         with self.lock:
             if kind == "playlist":
                 print(f"\nPlaylist: {data['title']}  ({data['count']} videos)")
+            elif kind == "channel":
+                print(
+                    f"\nChannel: {data['name']}  "
+                    f"({data['playlists']} playlist(s), {data['videos']} unique video(s))"
+                )
+            elif kind == "channel_playlist_skipped":
+                first_line = data["error"].strip().splitlines()[0][:80]
+                print(f"  (skipped playlist {data['title'][:50]}: {first_line})", file=sys.stderr)
             elif kind == "plan":
                 self.pending = data["pending"]
                 print(
@@ -211,6 +221,97 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_channel(args: argparse.Namespace) -> int:
+    base_dest = Path(args.dest).expanduser().resolve()
+    base_dest.mkdir(parents=True, exist_ok=True)
+
+    if shutil.which("ffmpeg") is None:
+        print(
+            "error: ffmpeg not found on PATH. It is required to extract and tag audio.\n"
+            "  Debian/Ubuntu/Colab:  apt-get install -y ffmpeg\n"
+            "  macOS:                brew install ffmpeg\n"
+            "  Windows:              winget install Gyan.FFmpeg",
+            file=sys.stderr,
+        )
+        return 2
+
+    opts = SyncOptions(
+        dest=base_dest,  # placeholder; replaced once the channel name is known
+        profile=args.format,
+        workers=args.workers,
+        cookies=Path(args.cookies).expanduser() if args.cookies else None,
+        cookies_from_browser=args.cookies_from_browser,
+        embed_metadata=not args.no_metadata,
+        embed_thumbnail=not args.no_thumbnail,
+        dedupe_by_title=args.dedupe_by_title,
+        retry_failed=args.retry_failed,
+        dry_run=args.dry_run,
+        rate_limit=args.rate_limit,
+        fragments=args.fragments,
+        sleep_interval=args.sleep,
+        staging=Path(args.staging).expanduser() if args.staging else None,
+        verbose=args.verbose,
+    )
+
+    try:
+        _, channel_name, playlists = list_channel(args.url, opts)
+    except BotCheckError:
+        print(BOTCHECK_HELP, file=sys.stderr)
+        return 3
+    except Exception as exc:  # noqa: BLE001 — surface any extractor failure cleanly
+        print(f"error reading channel: {exc}", file=sys.stderr)
+        return 1
+
+    if not playlists:
+        print(
+            "error: no playlists found at that URL. Point --url at the channel's "
+            "playlists tab, e.g. https://www.youtube.com/@handle/playlists",
+            file=sys.stderr,
+        )
+        return 1
+
+    dest = base_dest / safe_filename(channel_name, fallback="channel")
+    dest.mkdir(parents=True, exist_ok=True)
+    opts = dataclasses.replace(opts, dest=dest)
+
+    manifest = Manifest(dest).load()
+    if args.reconcile:
+        stats = manifest.reconcile()
+        if any(stats.values()):
+            print(
+                f"reconciled: adopted {stats['adopted']} existing file(s), "
+                f"{stats['missing']} missing, {stats['resized']} resized"
+            )
+
+    reporter = Reporter(quiet=args.quiet)
+    try:
+        result = sync_channel(args.url, opts, manifest, on_event=reporter)
+    except BotCheckError:
+        print(BOTCHECK_HELP, file=sys.stderr)
+        return 3
+    finally:
+        manifest.save(force=True)
+
+    if args.dry_run:
+        print("\n(dry run — nothing downloaded)")
+    else:
+        print(
+            f"\nDone. {result.downloaded} new "
+            f"({human_bytes(result.bytes_added)}), "
+            f"{result.already_present} already present, "
+            f"{result.skipped_duplicate} duplicates, "
+            f"{result.failed} failed."
+        )
+        print(f"Library: {dest}")
+        if result.failed:
+            print("Re-run with --retry-failed to retry the failures.")
+
+    if result.aborted:
+        print(BOTCHECK_HELP, file=sys.stderr)
+        return 3
+    return 1 if result.failed else 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     dest = Path(args.dest).expanduser().resolve()
     manifest = Manifest(dest).load()
@@ -292,6 +393,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("-v", "--verbose", action="store_true", help="show raw yt-dlp output")
     p.set_defaults(func=cmd_sync, reconcile=True)
+
+    # --- channel
+    p = sub.add_parser(
+        "channel",
+        help="merge every playlist on a channel into one deduped folder named after the channel",
+    )
+    p.add_argument("url", metavar="URL", help="channel's playlists page, e.g. https://www.youtube.com/@handle/playlists")
+    p.add_argument("-d", "--dest", required=True, help="parent folder — a subfolder named after the channel is created inside it")
+    p.add_argument(
+        "-f", "--format", choices=sorted(AUDIO_PROFILES), default=DEFAULT_PROFILE,
+        help=f"audio profile (default: {DEFAULT_PROFILE} — native AAC, no re-encode)",
+    )
+    p.add_argument("-w", "--workers", type=int, default=3, help="videos downloaded in parallel (default: 3)")
+    p.add_argument("--fragments", type=int, default=4, help="parallel chunks per video (default: 4)")
+    p.add_argument("--cookies", help="path to a cookies.txt export (fixes bot checks)")
+    p.add_argument("--cookies-from-browser", metavar="BROWSER", help="pull cookies live, e.g. chrome, firefox, edge")
+    p.add_argument("--dedupe-by-title", action="store_true", help="also skip the same track re-uploaded under a different ID")
+    p.add_argument("--retry-failed", action="store_true",
+                   help="also retry entries marked unavailable, and failures that hit the attempt cap")
+    p.add_argument("--no-metadata", action="store_true", help="do not write title/artist/album tags")
+    p.add_argument("--no-thumbnail", action="store_true", help="do not embed cover art")
+    p.add_argument("--rate-limit", metavar="RATE", help="cap download speed, e.g. 2M")
+    p.add_argument("--sleep", type=float, default=0.0, metavar="SECS", help="pause between videos to stay under rate limits")
+    p.add_argument("--staging", help="scratch dir for in-progress downloads (default: system temp)")
+    p.add_argument("--no-reconcile", dest="reconcile", action="store_false", help="skip the pre-run filesystem scan")
+    p.add_argument("-n", "--dry-run", action="store_true", help="show what would be downloaded, then stop")
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true", help="show raw yt-dlp output")
+    p.set_defaults(func=cmd_channel, reconcile=True)
 
     # --- status
     p = sub.add_parser("status", help="summarise what the library already contains")

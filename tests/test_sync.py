@@ -12,6 +12,7 @@ from yt2drive.downloader import (
     SyncOptions,
     _is_permanent,
     _raise_if_botcheck,
+    sync_channel,
     sync_playlist,
 )
 from yt2drive.manifest import STATUS_DUPLICATE, STATUS_OK, Entry, Manifest
@@ -328,3 +329,56 @@ def test_manifest_is_persisted_after_each_download(monkeypatch, opts):
     on_disk = Manifest(opts.dest).load()
     assert on_disk.is_done("vid00000000")
     assert on_disk.is_done("vid00000001")
+
+
+# ---------------------------------------------------------------- channel
+
+def stub_channel(monkeypatch, playlists, playlist_items, cid="UC123", name="Test Channel"):
+    """``playlists``: [(id, title, url)]. ``playlist_items``: {url: [PlaylistItem, ...]}."""
+    monkeypatch.setattr(downloader, "list_channel", lambda url, o: (cid, name, list(playlists)))
+
+    def fake_list_playlist(url, o):
+        items = playlist_items[url]
+        return ("pid", "ptitle", list(items))
+
+    monkeypatch.setattr(downloader, "list_playlist", fake_list_playlist)
+
+
+def test_channel_dedupes_video_shared_across_playlists(monkeypatch, opts):
+    shared = PlaylistItem(video_id="shared0001", title="Shared Track")
+    only_a = PlaylistItem(video_id="onlya00001", title="Only In A")
+    only_b = PlaylistItem(video_id="onlyb00001", title="Only In B")
+    playlists = [("PLA", "A", "url-a"), ("PLB", "B", "url-b")]
+    stub_channel(monkeypatch, playlists, {
+        "url-a": [shared, only_a],
+        "url-b": [shared, only_b],
+    })
+    calls = stub_downloads(monkeypatch)
+
+    result = sync_channel("channel-url", opts, Manifest(opts.dest).load())
+
+    assert result.total_in_playlist == 3  # shared counted once
+    assert result.downloaded == 3
+    assert sorted(calls) == ["onlya00001", "onlyb00001", "shared0001"]
+    assert calls.count("shared0001") == 1
+
+
+def test_channel_skips_a_broken_playlist_and_keeps_going(monkeypatch, opts):
+    ok_item = PlaylistItem(video_id="goodvid001", title="Fine")
+    playlists = [("PLA", "Broken", "url-broken"), ("PLB", "Fine", "url-fine")]
+    monkeypatch.setattr(downloader, "list_channel", lambda url, o: ("UC1", "Chan", list(playlists)))
+
+    def fake_list_playlist(url, o):
+        if url == "url-broken":
+            raise RuntimeError("playlist is private")
+        return ("PLB", "Fine", [ok_item])
+
+    monkeypatch.setattr(downloader, "list_playlist", fake_list_playlist)
+    stub_downloads(monkeypatch)
+
+    events = []
+    result = sync_channel("channel-url", opts, Manifest(opts.dest).load(),
+                           on_event=lambda kind, data: events.append((kind, data)))
+
+    assert result.downloaded == 1
+    assert any(kind == "channel_playlist_skipped" for kind, _ in events)
