@@ -63,8 +63,12 @@ AUDIO_PROFILES: Dict[str, dict] = {
 
 DEFAULT_PROFILE = "m4a"
 
-# Errors that mean "this video will never work" — recorded permanently so we
-# never waste a request on it again.
+# Errors that mean "this video will never work without extra auth" — recorded
+# permanently (skipped from now on) so we never waste a request on it again.
+# Age-restriction lives here, not in _BOTCHECK_MARKERS: it's a property of the
+# one video, not of the session, so it must not abort the rest of the batch —
+# only --cookies/--cookies-from-browser (and --retry-failed to revisit it)
+# can ever get past it.
 _PERMANENT_MARKERS = (
     "private video",
     "video unavailable",
@@ -77,13 +81,17 @@ _PERMANENT_MARKERS = (
     "no longer available",
     "unavailable in your country",
     "blocked it in your country",
+    "sign in to confirm your age",
+    "age-restricted",
 )
 
-# Errors that mean YouTube is challenging us — retrying harder makes it worse,
-# so the run aborts and tells the user to supply cookies.
+# Errors that mean YouTube is challenging the *session* — retrying harder
+# makes it worse, so the run aborts and tells the user to supply cookies.
+# Keep this list scoped to session-level challenges only; a per-video gate
+# (e.g. age-restriction) belongs in _PERMANENT_MARKERS instead, since it
+# shouldn't stop the rest of the playlist from downloading.
 _BOTCHECK_MARKERS = (
     "sign in to confirm you're not a bot",
-    "sign in to confirm your age",
     "confirm you're not a bot",
     "please sign in",
     "http error 429",

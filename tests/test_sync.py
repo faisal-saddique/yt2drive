@@ -271,6 +271,15 @@ def test_transient_errors_are_not_permanent(message):
     assert _is_permanent(message) is False
 
 
+def test_age_restriction_is_permanent_not_botcheck():
+    # Age-restriction is a property of the one video, not of the session —
+    # it must be skipped like any other permanent failure, and must NOT
+    # abort the rest of the batch the way a real bot-check does.
+    message = "Sign in to confirm your age. This video may be inappropriate for some users."
+    assert _is_permanent(message) is True
+    _raise_if_botcheck(message)  # must not raise
+
+
 @pytest.mark.parametrize("message", [
     "Sign in to confirm you're not a bot",
     "ERROR: HTTP Error 429: Too Many Requests",
