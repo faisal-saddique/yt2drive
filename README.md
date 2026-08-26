@@ -54,6 +54,10 @@ Running locally has one real advantage: your residential IP essentially never ge
 
 ---
 
+## The playlist file
+
+Every `sync` and `channel` run writes `<library>/<library folder name>.m3u8` — a standard M3U playlist listing every track in that folder, in download order. It exists because most players (VLC included) group audio in their library view by tag metadata (Artist/Album) rather than by folder, so two libraries with overlapping artists can blur together. Opening the `.m3u8` — or just having it in the folder when you hand the whole thing to a player — gives each library its own playlist entry regardless of tags. It's regenerated on every run, so it always matches what's actually on disk.
+
 ## How the deduplication works
 
 Re-running a sync must be cheap and must never produce a second copy of anything. Three independent layers make that true:

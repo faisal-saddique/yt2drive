@@ -8,7 +8,7 @@ import shutil
 import sys
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from . import __version__
 from .downloader import (
@@ -42,6 +42,26 @@ yt2drive a logged-in session:
 Running from your own machine, --cookies-from-browser chrome does it directly.
 Lowering --workers to 1 and adding --sleep 2 also helps.
 """
+
+
+def write_m3u(dest: Path, manifest: Manifest) -> None:
+    """Write ``<dest>/<dest folder name>.m3u8`` — a standalone playlist file
+    listing every track in this library, in download order. VLC (and most
+    players) treat an .m3u as its own playlist regardless of tag metadata,
+    which is what makes each library show up as a separate playlist rather
+    than getting merged by Artist/Album grouping.
+    """
+    tracks = [e for e in manifest if e.status == STATUS_OK and e.filename]
+    if not tracks:
+        return
+    tracks.sort(key=lambda e: e.downloaded_at)
+    lines = ["#EXTM3U"]
+    for e in tracks:
+        duration = int(e.duration) if e.duration else -1
+        title = f"{e.uploader} - {e.title}" if e.uploader else e.title
+        lines.append(f"#EXTINF:{duration},{title}")
+        lines.append(e.filename)
+    (dest / f"{dest.name}.m3u8").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def human_bytes(size: float) -> str:
@@ -140,6 +160,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     reporter = Reporter(quiet=args.quiet)
     totals = {"downloaded": 0, "bytes": 0, "failed": 0, "present": 0, "dupes": 0}
     libraries: List[Path] = []
+    library_manifests: Dict[Path, Manifest] = {}
     exit_code = 0
 
     # Without --auto-folder, every playlist shares one destination/manifest so
@@ -186,6 +207,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
         if dest not in libraries:
             libraries.append(dest)
+        library_manifests[dest] = manifest
 
         totals["downloaded"] += result.downloaded
         totals["bytes"] += result.bytes_added
@@ -203,6 +225,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("\n(dry run — nothing downloaded)")
     else:
+        for lib in libraries:
+            write_m3u(lib, library_manifests[lib])
         print(
             f"\nDone. {totals['downloaded']} new "
             f"({human_bytes(totals['bytes'])}), "
@@ -295,6 +319,7 @@ def cmd_channel(args: argparse.Namespace) -> int:
     if args.dry_run:
         print("\n(dry run — nothing downloaded)")
     else:
+        write_m3u(dest, manifest)
         print(
             f"\nDone. {result.downloaded} new "
             f"({human_bytes(result.bytes_added)}), "
